@@ -31,7 +31,7 @@ func normalizeLine(line string, opts Options) string {
 		}
 	}
 
-	// Пропуск символов (только если строка не пустая!)
+	// Пропуск символов (только если строка не пустая)
 	if opts.SkipChars > 0 && len(s) > 0 {
 		if opts.SkipChars < len(s) {
 			s = s[opts.SkipChars:]
@@ -164,17 +164,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "ошибка открытия входного файла: %v\n", err)
 		os.Exit(1)
 	}
+	defer input.Close()
 
 	output, err := createOutput(args)
 	if err != nil {
-		if input != os.Stdin {
-			input.Close()
-		}
 		fmt.Fprintf(os.Stderr, "ошибка создания выходного файла: %v\n", err)
 		os.Exit(1)
 	}
-
-	defer input.Close()
 	defer output.Close()
 
 	if err := Run(input, output, opts); err != nil {
