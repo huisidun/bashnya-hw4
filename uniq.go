@@ -100,6 +100,9 @@ func Run(r io.Reader, w io.Writer, opts Options) error {
 		return err
 	}
 
+	// 🔥 КРИТИЧЕСКИ ВАЖНО: не добавлять пустую строку в конце!
+	// Scanner уже возвращает точное содержимое.
+
 	result, err := Process(lines, opts)
 	if err != nil {
 		return err
