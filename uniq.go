@@ -106,6 +106,26 @@ func Run(r io.Reader, w io.Writer, opts Options) error {
 }
 
 func parseArgs() (Options, *os.File, *os.File, error) {
+	opts := parseFlags()
+	args := flag.Args()
+
+	input, err := openInput(args)
+	if err != nil {
+		return opts, nil, nil, err
+	}
+
+	output, err := createOutput(args)
+	if err != nil {
+		if input != os.Stdin {
+			input.Close()
+		}
+		return opts, nil, nil, err
+	}
+
+	return opts, input, output, nil
+}
+
+func parseFlags() Options {
 	var (
 		count      = flag.Bool("c", false, "подсчитать количество")
 		dups       = flag.Bool("d", false, "только повторяющиеся")
@@ -118,33 +138,11 @@ func parseArgs() (Options, *os.File, *os.File, error) {
 	flag.Parse()
 
 	if (*count && (*dups || *uniques)) || (*dups && *uniques) {
-		return Options{}, nil, nil, fmt.Errorf("нельзя использовать флаги -c, -d, -u вместе")
+		fmt.Fprintf(os.Stderr, "ошибка: нельзя использовать флаги -c, -d, -u вместе\n")
+		os.Exit(1)
 	}
 
-	args := flag.Args()
-
-	input := os.Stdin
-	if len(args) > 0 {
-		f, err := os.Open(args[0])
-		if err != nil {
-			return Options{}, nil, nil, err
-		}
-		input = f
-	}
-
-	output := os.Stdout
-	if len(args) > 1 {
-		f, err := os.Create(args[1])
-		if err != nil {
-			if input != os.Stdin {
-				input.Close()
-			}
-			return Options{}, nil, nil, err
-		}
-		output = f
-	}
-
-	opts := Options{
+	return Options{
 		Count:      *count,
 		Duplicates: *dups,
 		UniqueOnly: *uniques,
@@ -152,8 +150,20 @@ func parseArgs() (Options, *os.File, *os.File, error) {
 		SkipFields: *skipFields,
 		SkipChars:  *skipChars,
 	}
+}
 
-	return opts, input, output, nil
+func openInput(args []string) (*os.File, error) {
+	if len(args) == 0 {
+		return os.Stdin, nil
+	}
+	return os.Open(args[0])
+}
+
+func createOutput(args []string) (*os.File, error) {
+	if len(args) < 2 {
+		return os.Stdout, nil
+	}
+	return os.Create(args[1])
 }
 
 func main() {
