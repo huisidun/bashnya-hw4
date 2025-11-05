@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 )
@@ -18,7 +17,7 @@ type Options struct {
 	SkipChars   int
 }
 
-func normalizeLine(line string, opts Options) string {
+func normalize(line string, opts Options) string {
 	s := line
 
 	// Пропуск полей
@@ -31,8 +30,8 @@ func normalizeLine(line string, opts Options) string {
 		}
 	}
 
-	// Пропуск символов (только если строка не пустая)
-	if opts.SkipChars > 0 && len(s) > 0 {
+	// Пропуск символов (применяется всегда, даже если строка стала пустой)
+	if opts.SkipChars > 0 {
 		if opts.SkipChars < len(s) {
 			s = s[opts.SkipChars:]
 		} else {
@@ -46,75 +45,7 @@ func normalizeLine(line string, opts Options) string {
 	return s
 }
 
-func buildResult(order []string, counts map[string]int, originals map[string]string, opts Options) []string {
-	var result []string
-	for _, key := range order {
-		cnt := counts[key]
-		orig := originals[key]
-
-		if opts.Duplicates && cnt < 2 {
-			continue
-		}
-		if opts.UniqueOnly && cnt != 1 {
-			continue
-		}
-
-		if opts.Count {
-			result = append(result, fmt.Sprintf("%d %s", cnt, orig))
-		} else {
-			result = append(result, orig)
-		}
-	}
-	return result
-}
-
-func Process(lines []string, opts Options) ([]string, error) {
-	if (opts.Count && (opts.Duplicates || opts.UniqueOnly)) ||
-		(opts.Duplicates && opts.UniqueOnly) {
-		return nil, fmt.Errorf("нельзя использовать флаги -c, -d, -u одновременно")
-	}
-
-	counts := make(map[string]int)
-	order := []string{}
-	originals := make(map[string]string)
-
-	for _, line := range lines {
-		key := normalizeLine(line, opts)
-		if counts[key] == 0 {
-			order = append(order, key)
-			originals[key] = line
-		}
-		counts[key]++
-	}
-
-	return buildResult(order, counts, originals, opts), nil
-}
-
-func Run(r io.Reader, w io.Writer, opts Options) error {
-	scanner := bufio.NewScanner(r)
-	var lines []string
-	for scanner.Scan() {
-		lines = append(lines, scanner.Text())
-	}
-	if err := scanner.Err(); err != nil {
-		return err
-	}
-
-	// 🔥 КРИТИЧЕСКИ ВАЖНО: не добавлять пустую строку в конце!
-	// Scanner уже возвращает точное содержимое.
-
-	result, err := Process(lines, opts)
-	if err != nil {
-		return err
-	}
-
-	for _, line := range result {
-		fmt.Fprintln(w, line)
-	}
-	return nil
-}
-
-func parseFlags() (Options, error) {
+func main() {
 	var (
 		count      = flag.Bool("c", false, "подсчитать количество")
 		dups       = flag.Bool("d", false, "только повторяющиеся")
@@ -123,61 +54,106 @@ func parseFlags() (Options, error) {
 		skipFields = flag.Int("f", 0, "пропустить первые N полей")
 		skipChars  = flag.Int("s", 0, "пропустить первые N символов")
 	)
-
 	flag.Parse()
 
 	if (*count && (*dups || *uniques)) || (*dups && *uniques) {
-		return Options{}, fmt.Errorf("нельзя использовать флаги -c, -d, -u вместе")
+		fmt.Fprintln(os.Stderr, "ошибка: нельзя использовать флаги -c, -d, -u вместе")
+		os.Exit(1)
 	}
 
-	return Options{
+	args := flag.Args()
+
+	var input *os.File = os.Stdin
+	if len(args) > 0 {
+		f, err := os.Open(args[0])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ошибка открытия файла: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		input = f
+	}
+
+	var output *os.File = os.Stdout
+	if len(args) > 1 {
+		f, err := os.Create(args[1])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ошибка создания файла: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		output = f
+	}
+
+	opts := Options{
 		Count:      *count,
 		Duplicates: *dups,
 		UniqueOnly: *uniques,
 		IgnoreCase: *ignoreCase,
 		SkipFields: *skipFields,
 		SkipChars:  *skipChars,
-	}, nil
+	}
+
+	scanner := bufio.NewScanner(input)
+	var lines []string
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "ошибка чтения: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Обработка как в оригинальном uniq: только соседние дубликаты
+	var result []string
+	if len(lines) == 0 {
+		return
+	}
+
+	prevNorm := normalize(lines[0], opts)
+	prevOrig := lines[0]
+	countGroup := 1
+
+	for i := 1; i < len(lines); i++ {
+		currNorm := normalize(lines[i], opts)
+		if currNorm == prevNorm {
+			countGroup++
+		} else {
+			// Завершаем предыдущую группу
+			if shouldOutput(countGroup, opts) {
+				if opts.Count {
+					result = append(result, fmt.Sprintf("%d %s", countGroup, prevOrig))
+				} else {
+					result = append(result, prevOrig)
+				}
+			}
+			// Начинаем новую группу
+			prevNorm = currNorm
+			prevOrig = lines[i]
+			countGroup = 1
+		}
+	}
+
+	// Последняя группа
+	if shouldOutput(countGroup, opts) {
+		if opts.Count {
+			result = append(result, fmt.Sprintf("%d %s", countGroup, prevOrig))
+		} else {
+			result = append(result, prevOrig)
+		}
+	}
+
+	for _, line := range result {
+		fmt.Fprintln(output, line)
+	}
 }
 
-func openInput(args []string) (*os.File, error) {
-	if len(args) == 0 {
-		return os.Stdin, nil
+func shouldOutput(count int, opts Options) bool {
+	if opts.Duplicates {
+		return count >= 2
 	}
-	return os.Open(args[0])
-}
-
-func createOutput(args []string) (*os.File, error) {
-	if len(args) < 2 {
-		return os.Stdout, nil
+	if opts.UniqueOnly {
+		return count == 1
 	}
-	return os.Create(args[1])
-}
-
-func main() {
-	opts, err := parseFlags()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
-		os.Exit(1)
-	}
-
-	args := flag.Args()
-	input, err := openInput(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ошибка открытия входного файла: %v\n", err)
-		os.Exit(1)
-	}
-	defer input.Close()
-
-	output, err := createOutput(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ошибка создания выходного файла: %v\n", err)
-		os.Exit(1)
-	}
-	defer output.Close()
-
-	if err := Run(input, output, opts); err != nil {
-		fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
-		os.Exit(1)
-	}
+	return true // для -c или без флагов — всегда выводим по одному представителю
 }
