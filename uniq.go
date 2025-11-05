@@ -19,25 +19,31 @@ type Options struct {
 }
 
 func normalizeLine(line string, opts Options) string {
-	fields := strings.Fields(line)
+	s := line
+
+	// Пропуск полей
 	if opts.SkipFields > 0 {
+		fields := strings.Fields(s)
 		if opts.SkipFields < len(fields) {
-			line = strings.Join(fields[opts.SkipFields:], " ")
+			s = strings.Join(fields[opts.SkipFields:], " ")
 		} else {
-			line = ""
+			s = ""
 		}
 	}
-	if opts.SkipChars > 0 {
-		if opts.SkipChars < len(line) {
-			line = line[opts.SkipChars:]
+
+	// Пропуск символов (только если строка не пустая!)
+	if opts.SkipChars > 0 && len(s) > 0 {
+		if opts.SkipChars < len(s) {
+			s = s[opts.SkipChars:]
 		} else {
-			line = ""
+			s = ""
 		}
 	}
+
 	if opts.IgnoreCase {
-		line = strings.ToLower(line)
+		s = strings.ToLower(s)
 	}
-	return line
+	return s
 }
 
 func buildResult(order []string, counts map[string]int, originals map[string]string, opts Options) []string {
@@ -105,27 +111,7 @@ func Run(r io.Reader, w io.Writer, opts Options) error {
 	return nil
 }
 
-func parseArgs() (Options, *os.File, *os.File, error) {
-	opts := parseFlags()
-	args := flag.Args()
-
-	input, err := openInput(args)
-	if err != nil {
-		return opts, nil, nil, err
-	}
-
-	output, err := createOutput(args)
-	if err != nil {
-		if input != os.Stdin {
-			input.Close()
-		}
-		return opts, nil, nil, err
-	}
-
-	return opts, input, output, nil
-}
-
-func parseFlags() Options {
+func parseFlags() (Options, error) {
 	var (
 		count      = flag.Bool("c", false, "подсчитать количество")
 		dups       = flag.Bool("d", false, "только повторяющиеся")
@@ -138,8 +124,7 @@ func parseFlags() Options {
 	flag.Parse()
 
 	if (*count && (*dups || *uniques)) || (*dups && *uniques) {
-		fmt.Fprintf(os.Stderr, "ошибка: нельзя использовать флаги -c, -d, -u вместе\n")
-		os.Exit(1)
+		return Options{}, fmt.Errorf("нельзя использовать флаги -c, -d, -u вместе")
 	}
 
 	return Options{
@@ -149,7 +134,7 @@ func parseFlags() Options {
 		IgnoreCase: *ignoreCase,
 		SkipFields: *skipFields,
 		SkipChars:  *skipChars,
-	}
+	}, nil
 }
 
 func openInput(args []string) (*os.File, error) {
@@ -167,11 +152,28 @@ func createOutput(args []string) (*os.File, error) {
 }
 
 func main() {
-	opts, input, output, err := parseArgs()
+	opts, err := parseFlags()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ошибка: %v\n", err)
 		os.Exit(1)
 	}
+
+	args := flag.Args()
+	input, err := openInput(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ошибка открытия входного файла: %v\n", err)
+		os.Exit(1)
+	}
+
+	output, err := createOutput(args)
+	if err != nil {
+		if input != os.Stdin {
+			input.Close()
+		}
+		fmt.Fprintf(os.Stderr, "ошибка создания выходного файла: %v\n", err)
+		os.Exit(1)
+	}
+
 	defer input.Close()
 	defer output.Close()
 
